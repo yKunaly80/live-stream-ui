@@ -1,0 +1,10 @@
+<section class="bg-slate-500">
+    <div class="grid grid-cols-3 gap-2 lg:gap-4 border-solid border-2 border-cyan-500 w-full h-full">
+        <div class="col-span-3 lg:col-span-2  border-emerald-500 border-2 border-solid">
+            <video class="w-full p-5" #videoElement autoplay [muted]="true"></video>
+        </div>
+        <div class="col-span-3 lg:col-span-1 border-emerald-500 border-2 border-solid">
+            <video class="w-full p-5" width="640" height="480" [src]="videoSrc" #userVideoElement autoplay [muted]="true"></video>
+        </div>
+    </div>
+</section>
