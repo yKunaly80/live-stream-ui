@@ -10,30 +10,26 @@ import { Socket } from 'ngx-socket-io';
   styleUrl: './live-class.component.scss'
 })
 export class LiveClassComponent {
-  private _stream!: MediaStream
-  public mediaRecorder!: MediaRecorder;
-  public recordedChunks: Blob[] = [];
-  recordedBlob: any
-  videoSrc = ''
+  private _localStream!: MediaStream
 
   @ViewChild('videoElement') videoElement!: ElementRef;
   @ViewChild('userVideoElement') userVideoElement!: ElementRef;
 
+  private _server = {
+    iceServers: [
+      {
+        urls: [
+          'stun:stun1.l.google.com:19302',
+          'stun:stun2.l.google.com:19302'
+        ]
+      }
+    ],
+    iceCandidatePoolSize: 10,
+  }
   constructor(
     private _socketService: SocketService,
     private socket: Socket
   ) {
-    this.socket.on('mediaSetup', (data: any) => {
-      console.log('Received media data from User 1:', data.data);
-      const videoBlob = new Blob([data.data], { type: 'video/mp4' });
-      this.videoSrc = URL.createObjectURL(videoBlob)
-      // Assuming data contains the MediaStream object
-      // const mediaStream: MediaStream = data.data.mediaStream;
-      // console.log(data.data.mediaStream);
-
-      // this.userVideoElement.nativeElement.srcObject = mediaStream;
-      // (document.getElementById('videoDiv') as HTMLVideoElement).srcObject = mediaStream;
-    });
     this._meadiaSetup()
   }
 
@@ -48,59 +44,78 @@ export class LiveClassComponent {
         audio: true
       }
 
-      this._stream = await navigator.mediaDevices.getUserMedia(mediaConstrains)
-      this.videoElement.nativeElement.srcObject = this._stream
+      this._localStream = await navigator.mediaDevices.getUserMedia(mediaConstrains)
+      this.videoElement.nativeElement.srcObject = this._localStream
 
-      this.videoElement.nativeElement.addEventListener('play', async () => {
-        this.mediaRecorder = new MediaRecorder(this._stream);
-        this.mediaRecorder.ondataavailable = (event) => {
-          if (event.data.size > 0) {
-            this.recordedChunks.push(event.data);
-          }
-        };
-
-        this._sendData()
-        // this.mediaRecorder.start();
-        // console.log('Media setup complete, sending message...');
-        // this._socketService.sendMessage({ type: 'media', data: new Blob(this.recordedChunks, { type: 'video/webm' }) });
-        // const k = setInterval(() => { 
-        // }, 1000)
-      })
-
+      this._socketService.joinRoom()
+      this._RTCPeerConnection()
     }
     catch (error) {
       console.log('error==>', error);
     }
   }
 
-  private _sendData() {
-    this.mediaRecorder.start();
-    const k = setInterval(async () => {
-      console.log('Media setup complete, sending message...');
-      await this.stopMediaRecorder();
-      this._socketService.sendMessage({ type: 'media', data: this.recordedBlob });
-      this.recordedChunks = []
-      this.mediaRecorder.start();
-    }, 1000 )
-  }
+  private async _RTCPeerConnection(): Promise<void> {
+    try {
+      const peerConnection = new RTCPeerConnection(this._server)
 
-  /**
-   * This Function is used to stop the recoder 
-   */
-  private async stopMediaRecorder(): Promise<void> {
-    await new Promise<void>((resolve) => {
-      this.mediaRecorder.onstop = () => {
-        this.recordedBlob = new Blob(this.recordedChunks, { type: 'video/webm' });
-        // const file = new File(recordedBlob,'name.mp4');
-        // const recordedBlob = new Blob(this.recordedChunks, { type: 'application/octet-stream' });
-        // this.recordedVideo = URL.createObjectURL(recordedBlob);
-        resolve();
+      const remoteStream = new MediaStream()
+
+      this._localStream.getTracks().forEach((track) => {
+        peerConnection.addTrack(track, this._localStream)
+      })
+
+      peerConnection.ontrack = (event) => {
+        event.streams[0].getTracks().forEach((track) => {
+          remoteStream.addTrack(track);
+        })
       };
-      this.mediaRecorder.onerror = (error) => {
-        console.error('Error stopping recording:', error);
-        resolve();
+
+      this.userVideoElement.nativeElement.srcObject = remoteStream
+
+      const peerConnectionOffer = await peerConnection.createOffer()
+      await peerConnection.setLocalDescription(peerConnectionOffer)
+      this._socketService.sendOffer(peerConnectionOffer)
+
+      this.socket.on('answer', (answer: any) => {
+        console.log('ans', answer);
+        peerConnection.setRemoteDescription(answer)
+
+      })
+
+      peerConnection.onicecandidate = async (event: RTCPeerConnectionIceEvent) => {
+        if (event.candidate) {
+          this._socketService.sendICECandidate(event.candidate)
+        }
       };
-      this.mediaRecorder.stop();
-    });
+
+      this.socket.on('offerReceive', async (data: any) => {
+        console.log('data==>', data);
+        // const peerConnectionAnswer = await peerConnection.createAnswer()
+        // await peerConnection.remoteDescription(peerConnectionAnswer)
+        await peerConnection.setRemoteDescription(data)
+        const peerConnectionAnswer = await peerConnection.createAnswer()
+        await peerConnection.setLocalDescription(peerConnectionAnswer)
+        this._socketService.sendAnswer(peerConnectionAnswer)
+      })
+
+      this.socket.on('answerReceive', (data: any) => { 
+        // console.log('data ans==>',peerConnection.currentRemoteDescription);
+        peerConnection.setRemoteDescription(data)
+      })
+
+      this.socket.on('ice-candidate-receive', (data: any) => { 
+        console.log('ice ==>',data);
+          peerConnection.addIceCandidate(data)
+      })
+
+      // this.socket.emit('ice-candidate', (candidate: any) => {
+      //   peerConnection.addIceCandidate(candidate)
+      // })
+    }
+    catch (error) {
+      console.log('error==>', error);
+
+    }
   }
 }
